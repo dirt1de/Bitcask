@@ -8,7 +8,7 @@ use serde_json::Deserializer;
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File, OpenOptions},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::PathBuf,
 };
 use thiserror::Error;
@@ -28,9 +28,9 @@ pub enum KvError {
 }
 
 pub struct KvStore {
-    file_id: usize,                // The file_id of the current active data file for write
-    writer: File,                  // the file handle for the active data file
-    readers: HashMap<usize, File>, // file_id -> reader of that file
+    file_id: usize,          // The file_id of the current active data file for write
+    writer: BufWriter<File>, // the file handle for the active data file
+    readers: HashMap<usize, BufReader<File>>, // file_id -> reader of that file
     dir: PathBuf,
     key_dir: BTreeMap<String, KeyDirValue>,
     uncompacted: usize,
@@ -125,6 +125,7 @@ impl KvStore {
                 let cmd_string = serde_json::to_string(&cmd)?;
                 file.write(cmd_string.as_bytes())?;
 
+                // Notice we need to count in both the RM command length & previous Set command
                 self.uncompacted += cmd_string.len() + value.value_size;
 
                 Ok(())
@@ -154,19 +155,23 @@ impl KvStore {
             &mut uncompacted,
         )?;
 
-        let writer = OpenOptions::new()
-            .write(true)
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(log_path(&dir, file_id))?;
+        let writer = BufWriter::new(
+            OpenOptions::new()
+                .write(true)
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(log_path(&dir, file_id))?,
+        );
 
-        let latest_reader = OpenOptions::new()
-            .write(true)
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(log_path(&dir, file_id))?;
+        let latest_reader = BufReader::new(
+            OpenOptions::new()
+                .write(true)
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(log_path(&dir, file_id))?,
+        );
 
         readers.insert(file_id, latest_reader);
 
@@ -204,17 +209,22 @@ impl KvStore {
             .open(log_path(&self.dir, new_writer_id))?;
 
         // Update self with info of this new writer
-        self.writer = new_writer;
+        self.writer = BufWriter::new(new_writer);
         self.file_id = new_writer_id;
 
         // Create the compact_file and copy all currently active k-v commands
         // from the old readers to compact_file
-        let mut compact_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .append(true)
-            .create(true)
-            .open(log_path(&self.dir, compact_file_id))?;
+        let compact_file_path = log_path(&self.dir, compact_file_id);
+        let compact_file_path_clone = compact_file_path.clone();
+
+        let mut compact_file = BufWriter::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .append(true)
+                .create(true)
+                .open(compact_file_path)?,
+        );
 
         let mut start_index = 0; // Used to keep track of the start_position for each command
                                  // copied into the compact_file
@@ -253,16 +263,20 @@ impl KvStore {
         }
 
         // Make all future reads to compact_file
-        self.readers.insert(compact_file_id, compact_file);
+        self.readers.insert(
+            compact_file_id,
+            BufReader::new(File::open(compact_file_path_clone)?),
+        );
 
-        let mut new_writer_file = OpenOptions::new()
+        let new_writer_file = OpenOptions::new()
             .read(true)
             .write(true)
             .append(true)
             .create(true)
             .open(log_path(&self.dir, new_writer_id))?;
 
-        self.readers.insert(new_writer_id, new_writer_file);
+        self.readers
+            .insert(new_writer_id, BufReader::new(new_writer_file));
 
         self.uncompacted = 0;
 
@@ -279,7 +293,7 @@ fn log_path(dir: &PathBuf, file_id: usize) -> PathBuf {
 pub fn replay_log(
     dir: &PathBuf,
     file_id: &mut usize,
-    readers: &mut HashMap<usize, File>,
+    readers: &mut HashMap<usize, BufReader<File>>,
     key_dir: &mut BTreeMap<String, KeyDirValue>,
     uncompacted: &mut usize,
 ) -> Result<()> {
@@ -308,12 +322,14 @@ pub fn replay_log(
     if file_ids.is_empty() {
         // If there is no log in the directory,
         // It means this is the first start. So you can just create a single writer file
-        let writer = OpenOptions::new()
-            .write(true)
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(log_path(&dir, 0))?;
+        let writer = BufReader::new(
+            OpenOptions::new()
+                .write(true)
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(log_path(&dir, 0))?,
+        );
 
         readers.insert(0, writer);
         *file_id = 0;
@@ -383,7 +399,7 @@ pub fn replay_log(
             .append(true)
             .create(true)
             .open(log_path(&dir, id))?;
-        readers.insert(id, file);
+        readers.insert(id, BufReader::new(file));
     }
 
     return Ok(());
