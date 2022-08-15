@@ -28,7 +28,7 @@ fn main() -> Result<()> {
             let set_result = kv_store.set(key, value);
 
             if let Err(e) = set_result {
-                println!("We have an error: {}", e);
+                println!("Fail to execute SET command because of: {}", e);
                 std::process::exit(1)
             };
         }
@@ -44,7 +44,7 @@ fn main() -> Result<()> {
                     println!("Key not found");
                 }
                 Err(e) => {
-                    println!("We have an error: {}", e);
+                    println!("Fail to execute GET command because of: {}", e);
                     std::process::exit(1)
                 }
             }
