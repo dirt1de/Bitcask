@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use kvs::KvStore;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
@@ -15,109 +15,65 @@ fn generate_random_bytes(num_chars: usize) -> String {
 }
 
 fn set_bench(c: &mut Criterion) {
-    let mut group = c.benchmark_group("set_bench");
-    group.bench_function("bitcask-set-128b", |b| {
-        b.iter_batched(
-            || {
-                let temp_dir = TempDir::new().unwrap();
-                (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
-            },
-            |(mut store, _temp_dir)| {
-                for i in 1..10000 {
-                    let key = format!("key{}", i);
-                    let key_len = key.len();
+    let mut group = c.benchmark_group("bitcask-set-bench");
+    for size in [128, 256, 512, 1024, 2048, 4096].iter() {
+        group.throughput(Throughput::Bytes(*size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+            b.iter_batched(
+                || {
+                    let temp_dir = TempDir::new().unwrap();
+                    (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
+                },
+                |(mut store, _temp_dir)| {
+                    for i in 1..10000 {
+                        let key = format!("key{}", i);
+                        let key_len = key.len();
 
-                    store
-                        .set(key, generate_random_bytes(128 - key_len))
-                        .unwrap();
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    group.bench_function("bitcask-set-256b", |b| {
-        b.iter_batched(
-            || {
-                let temp_dir = TempDir::new().unwrap();
-                (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
-            },
-            |(mut store, _temp_dir)| {
-                for i in 1..10000 {
-                    let key = format!("key{}", i);
-                    let key_len = key.len();
-
-                    store
-                        .set(key, generate_random_bytes(256 - key_len))
-                        .unwrap();
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    group.bench_function("bitcask-set-512b", |b| {
-        b.iter_batched(
-            || {
-                let temp_dir = TempDir::new().unwrap();
-                (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
-            },
-            |(mut store, _temp_dir)| {
-                for i in 1..10000 {
-                    let key = format!("key{}", i);
-                    let key_len = key.len();
-
-                    store
-                        .set(key, generate_random_bytes(512 - key_len))
-                        .unwrap();
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    group.bench_function("bitcask-set-1kb", |b| {
-        b.iter_batched(
-            || {
-                let temp_dir = TempDir::new().unwrap();
-                (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
-            },
-            |(mut store, _temp_dir)| {
-                for i in 1..10000 {
-                    let key = format!("key{}", i);
-                    let key_len = key.len();
-
-                    store
-                        .set(key, generate_random_bytes(1000 - key_len))
-                        .unwrap();
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
-    group.bench_function("bitcask-set-2kb", |b| {
-        b.iter_batched(
-            || {
-                let temp_dir = TempDir::new().unwrap();
-                (KvStore::open(temp_dir.path()).unwrap(), temp_dir)
-            },
-            |(mut store, _temp_dir)| {
-                for i in 1..10000 {
-                    let key = format!("key{}", i);
-                    let key_len = key.len();
-
-                    store
-                        .set(key, generate_random_bytes(2000 - key_len))
-                        .unwrap();
-                }
-            },
-            BatchSize::SmallInput,
-        )
-    });
-
+                        store
+                            .set(key, generate_random_bytes(size - key_len))
+                            .unwrap();
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
     group.finish();
 }
 
-criterion_group!(benches, set_bench);
+fn get_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("bitcask-get-bench");
+    for size in [128, 256, 512, 1024, 2048, 4096].iter() {
+        group.throughput(Throughput::Bytes(*size as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
+            b.iter_batched(
+                || {
+                    let temp_dir = TempDir::new().unwrap();
+                    let mut store = KvStore::open(temp_dir.path()).unwrap();
+                    for i in 1..10000 {
+                        let key = format!("key{}", i);
+                        let key_len = key.len();
+
+                        store
+                            .set(key, generate_random_bytes(size - key_len))
+                            .unwrap();
+                    }
+
+                    (store, temp_dir)
+                },
+                |(mut store, _temp_dir)| {
+                    for i in 1..10000 {
+                        let key = format!("key{}", i);
+
+                        store.get(key);
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, set_bench, get_bench);
 criterion_main!(benches);
